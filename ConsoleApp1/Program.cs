@@ -17,7 +17,7 @@ namespace OCR_test
             byte[] imgData;
             try
             {
-                using (var file = File.OpenRead("image.jpg"))
+                using (var file = File.OpenRead("image2.png"))
                 {
                     imgData = new byte[file.Length];
                     file.Read(imgData, 0, imgData.Length);
@@ -63,6 +63,8 @@ namespace OCR_test
         {
             using var src = Cv2.ImDecode(imageBytes, ImreadModes.Color);
 
+            var bytes1 = src.ToBytes(".jpg");
+
             using var claheImg = new Mat();
             using (var clahe = Cv2.CreateCLAHE(clipLimit: 3.0, tileGridSize: new OpenCvSharp.Size(8, 8)))
             {
@@ -81,6 +83,8 @@ namespace OCR_test
                 Cv2.CvtColor(newLab, claheImg, ColorConversionCodes.Lab2BGR);
             }
 
+            
+
             using var blurred = new Mat();
             Cv2.GaussianBlur(claheImg, blurred, new OpenCvSharp.Size(5, 5), 2.0);
 
@@ -93,13 +97,15 @@ namespace OCR_test
             using var normalized = new Mat();
             Cv2.Absdiff(gray, background, normalized);
 
+            var bytes2 = normalized.ToBytes(".jpg");
+
             using var blackTextMask = new Mat();
             Cv2.Threshold(normalized, blackTextMask, 51, 255, ThresholdTypes.Binary);
-            var bytes1 = blackTextMask.ToBytes(".jpg");
+            
 
             using var whiteTextMask = new Mat();
             Cv2.Threshold(gray, whiteTextMask, 204, 255, ThresholdTypes.Binary);
-            var bytes2 = whiteTextMask.ToBytes(".jpg");
+            
 
             using var allTextMask = new Mat();
             Cv2.BitwiseOr(blackTextMask, whiteTextMask, allTextMask);
@@ -124,7 +130,7 @@ namespace OCR_test
 
             // Для Windows OCR лучше всего передавать отбеленный результат (Item3)
             // или нормализованный по контрасту (в зависимости от качества исходника)
-            byte[] processedBytes = corrImgData.Item3;
+            byte[] processedBytes = corrImgData.Item1;
 
             var resultList = new System.Collections.Generic.List<(Windows.Foundation.Rect, string)>();
             var language = new Windows.Globalization.Language("ru-RU");
