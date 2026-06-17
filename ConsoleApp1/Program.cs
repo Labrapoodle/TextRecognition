@@ -3,6 +3,7 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using Tesseract;
 
@@ -30,7 +31,7 @@ namespace OCR_test
             sw.Flush();
         }
 
-
+        /*
         static (byte[], byte[], byte[]) ProcessImage(byte[] imageBytes)
         {
             using var src = Cv2.ImDecode(imageBytes, ImreadModes.Color);
@@ -123,13 +124,17 @@ namespace OCR_test
                 result.ToBytes(".png")         // результат
             );
         }
+        */
 
-
-        /*
+        
         static (byte[], byte[], byte[]) ProcessImage(byte[] imageBytes)
         {
             // 1. Загрузка изображения
             using var src = Cv2.ImDecode(imageBytes, ImreadModes.Color);
+
+            
+            
+            
 
             // 2. Улучшение контраста (CLAHE) только для яркости
             using var claheImg = new Mat();
@@ -143,23 +148,26 @@ namespace OCR_test
                 using var aChannel = channels[1];
                 using var bChannel = channels[2];
 
+
+
+
                 clahe.Apply(lChannel, lChannel);
 
                 using var newLab = new Mat();
                 Cv2.Merge(new[] { lChannel, aChannel, bChannel }, newLab);
                 Cv2.CvtColor(newLab, claheImg, ColorConversionCodes.Lab2BGR);
             }
-
+            
             // 3. Размытие и перевод в серый цвет
             using var blurred = new Mat();
             Cv2.GaussianBlur(claheImg, blurred, new OpenCvSharp.Size(5, 5), 2.0);
             //Cv2.MedianBlur(claheImg, blurred, 577);
-            
+            //Cv2.BilateralFilter(claheImg, blurred,15,150,150);
+
             using var gray = new Mat();
             Cv2.CvtColor(blurred, gray, ColorConversionCodes.BGR2GRAY);
 
 
-        */
 
 
 
@@ -170,25 +178,26 @@ namespace OCR_test
 
 
 
-        /*
-        using var normalized = new Mat();
-        var kernel = Cv2.GetStructuringElement(
-            MorphShapes.Rect,
-            new OpenCvSharp.Size(101, 101));
 
-        Cv2.MorphologyEx(
-            gray,
-            background,
-            MorphTypes.Close,
-            kernel
-         );
-        Cv2.Absdiff(gray, background, normalized);
-        */
-        // Получаем карту освещения
+            /*
+            using var normalized = new Mat();
+            var kernel = Cv2.GetStructuringElement(
+                MorphShapes.Rect,
+                new OpenCvSharp.Size(101, 101));
 
+            Cv2.MorphologyEx(
+                gray,
+                background,
+                MorphTypes.Close,
+                kernel
+             );
+            Cv2.Absdiff(gray, background, normalized);
+            */
+            // Получаем карту освещения
 
-        /*
-        using var background = new Mat();
+            var bytes1 = gray.ToBytes(".jpg");
+
+            using var background = new Mat();
 
         Cv2.GaussianBlur(
             gray,
@@ -197,18 +206,31 @@ namespace OCR_test
             50
         );
         // Вычитаем фон
-        using var normalized = new Mat();
-        Cv2.Absdiff(gray, background, normalized);
+        using var diffed = new Mat();
+        Cv2.Absdiff(gray, background, diffed);
 
-        // 4. Ищем ЧЕРНЫЕ буквы (все, что темнее 51, станет черным)
-        using var blackTextMask = new Mat();
-        Cv2.Threshold(normalized, blackTextMask, 51, 255, ThresholdTypes.Binary);
-        var bytes1 = blackTextMask.ToBytes(".jpg");
+            
 
-        // 5. Ищем БЕЛЫЕ буквы (все, что светлее 204, станет черным после инверсии)
-        using var whiteTextMask = new Mat();
+        //    using var normalized = new Mat();
+        //Cv2.Normalize(diffed, normalized, 0, 255, NormTypes.MinMax);
+
+
+        
+
+
+
+
+
+
+            // 4. Ищем ЧЕРНЫЕ буквы (все, что темнее 51, станет черным)
+            using var blackTextMask = new Mat();
+        Cv2.Threshold(diffed, blackTextMask, 51, 255, ThresholdTypes.Binary);
+            var bytes2 = diffed.ToBytes(".jpg");
+
+            // 5. Ищем БЕЛЫЕ буквы (все, что светлее 204, станет черным после инверсии)
+            using var whiteTextMask = new Mat();
         Cv2.Threshold(gray, whiteTextMask, 204, 255, ThresholdTypes.Binary);
-        var bytes2 = whiteTextMask.ToBytes(".jpg");
+        
 
         // 6. Объединяем буквы вместе (Черные буквы + Белые буквы)
         using var allTextMask = new Mat();
@@ -225,7 +247,7 @@ namespace OCR_test
         return (bytes1, bytes2, bytes3);
 
     }
-    */
+    
 
 
         public static List<(Tesseract.Rect, string)> Recognition(string TessDataPath, byte[] imgData)
