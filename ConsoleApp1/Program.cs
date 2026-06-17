@@ -17,7 +17,7 @@ namespace OCR_test
             
             
 
-            // 1. Загружаем и переводим в ч/б
+            // 1. Загружаем и переводим в ч/б 
             Mat src = Cv2.ImRead("image.jpg");
             Mat gray = new Mat();
             Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
