@@ -19,6 +19,10 @@ namespace OCR_test
 
             // 1. Загружаем и переводим в ч/б 
             Mat src = Cv2.ImRead("image.jpg");
+
+            //Mat preprocessed = new();
+            //preprocessed = ImPreProcess(src);
+
             Mat gray = new Mat();
             Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
 
@@ -35,11 +39,14 @@ namespace OCR_test
                 thresh = transformed;
                 File.WriteAllBytes("TRANSFORMED.jpg", transformed.ToBytes(".jpg"));
             }
+            Mat preprocessed = new();
+            preprocessed = ImPreProcess(thresh);
+
             // 3. Создаем ГОРИЗОНТАЛЬНОЕ ядро для дилатации (ширина 25, высота 3)
             // Оно склеит буквы в строке, но не склеит строки между собой
             Mat kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(25, 3));
             Mat dilated = new Mat();
-            Cv2.Dilate(thresh, dilated, kernel);
+            Cv2.Dilate(preprocessed, dilated, kernel);
 
             File.WriteAllBytes("DILATED.jpg", dilated.ToBytes(".jpg"));
 
@@ -66,16 +73,129 @@ namespace OCR_test
         }
 
 
+        static Mat ImPreProcess(Mat src)
+        {
+            
+
+            // 2. Улучшение контраста (CLAHE) только для яркости
+            using var claheImg = new Mat();
+            using (var clahe = Cv2.CreateCLAHE(clipLimit: 3.0, tileGridSize: new OpenCvSharp.Size(8, 8)))
+            {
+                using var lab = new Mat();
+                Cv2.CvtColor(src, lab, ColorConversionCodes.BGR2Lab);
+
+                var channels = Cv2.Split(lab);
+                using var lChannel = channels[0]; // Канал яркости
+                using var aChannel = channels[1];
+                using var bChannel = channels[2];
+
+
+
+
+                clahe.Apply(lChannel, lChannel);
+
+                using var newLab = new Mat();
+                Cv2.Merge(new[] { lChannel, aChannel, bChannel }, newLab);
+                Cv2.CvtColor(newLab, claheImg, ColorConversionCodes.Lab2BGR);
+            }
+
+            // 3. Размытие и перевод в серый цвет
+            using var blurred = new Mat();
+            Cv2.GaussianBlur(claheImg, blurred, new OpenCvSharp.Size(5, 5), 2.0);
+            //Cv2.MedianBlur(claheImg, blurred, 577);
+            //Cv2.BilateralFilter(claheImg, blurred,15,150,150);
+
+            using var gray = new Mat();
+            Cv2.CvtColor(blurred, gray, ColorConversionCodes.BGR2GRAY);
+
+
+
+
+
+
+
+
+
+
+
+
+
+            /*
+            using var normalized = new Mat();
+            var kernel = Cv2.GetStructuringElement(
+                MorphShapes.Rect,
+                new OpenCvSharp.Size(101, 101));
+
+            Cv2.MorphologyEx(
+                gray,
+                background,
+                MorphTypes.Close,
+                kernel
+             );
+            Cv2.Absdiff(gray, background, normalized);
+            */
+            // Получаем карту освещения
+
+            //var bytes1 = gray.ToBytes(".jpg");
+
+            using var background = new Mat();
+
+            Cv2.GaussianBlur(
+                gray,
+                background,
+                new OpenCvSharp.Size(0, 0),
+                50
+            );
+            // Вычитаем фон
+            using var diffed = new Mat();
+            Cv2.Absdiff(gray, background, diffed);
+
+
+
+            //    using var normalized = new Mat();
+            //Cv2.Normalize(diffed, normalized, 0, 255, NormTypes.MinMax);
+
+
+
+
+
+
+
+
+
+            // 4. Ищем ЧЕРНЫЕ буквы (все, что темнее 51, станет черным)
+            using var blackTextMask = new Mat();
+            Cv2.Threshold(diffed, blackTextMask, 51, 255, ThresholdTypes.Binary);
+            //var bytes2 = diffed.ToBytes(".jpg");
+
+            // 5. Ищем БЕЛЫЕ буквы (все, что светлее 204, станет черным после инверсии)
+            using var whiteTextMask = new Mat();
+            Cv2.Threshold(gray, whiteTextMask, 204, 255, ThresholdTypes.Binary);
+
+
+            // 6. Объединяем буквы вместе (Черные буквы + Белые буквы)
+            using var allTextMask = new Mat();
+            Cv2.BitwiseOr(blackTextMask, whiteTextMask, allTextMask);
+
+            // 7. Создаем финальный результат: черные буквы на белом фоне
+            using var result = new Mat(src.Size(), MatType.CV_8UC1, new Scalar(255)); // Белый лист
+
+            // Там, где был текст (allTextMask), красим в черный цвет (0)
+            result.SetTo(new Scalar(0), allTextMask);
+            
+            return result;
+        }
+
         static Mat transform(Mat src)
         {
 
 
-            Mat gray = new Mat();
-            Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
+            //Mat gray = new Mat();
+            //Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
 
             // 1. Выделяем границы, убирая мелкий шум матрицы монитора
-            Mat blurred = new Mat();
-            Cv2.GaussianBlur(gray, blurred, new OpenCvSharp.Size(3, 3), 0);
+            //Mat blurred = new Mat();
+            //Cv2.GaussianBlur(gray, blurred, new OpenCvSharp.Size(3, 3), 0);
             Mat edges = new Mat();
             Cv2.Canny(src, edges, 80, 200);
 
