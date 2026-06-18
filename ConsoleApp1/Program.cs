@@ -132,16 +132,56 @@ namespace OCR_test
             // 1. Загрузка изображения
             using var src = Cv2.ImDecode(imageBytes, ImreadModes.Color);
 
-            
-            
-            
+
+
+
+            Point2f[] srcPoints =
+            {
+                new Point2f(217, 225),   // левый верхний
+                new Point2f(4909, 157),  // правый верхний
+                new Point2f(4909,3725),  // правый нижний
+                new Point2f(233,3697)   // левый нижний
+            };
+
+            double widthTop = Distance(srcPoints[0], srcPoints[1]);
+            double widthBottom = Distance(srcPoints[3], srcPoints[2]);
+            int width = (int)Math.Max(widthTop, widthBottom);
+
+            double heightLeft = Distance(srcPoints[0], srcPoints[3]);
+            double heightRight = Distance(srcPoints[1], srcPoints[2]);
+            int height = (int)Math.Max(heightLeft, heightRight);
+
+            // Куда отображаем точки
+            Point2f[] dstPoints =
+                {
+                new Point2f(0, 0),
+                new Point2f(width - 1, 0),
+                new Point2f(width - 1, height - 1),
+                new Point2f(0, height - 1)
+            };
+
+            // Матрица перспективного преобразования
+            Mat matrix = Cv2.GetPerspectiveTransform(srcPoints, dstPoints);
+
+            // Выпрямление
+            Mat transformed = new Mat();
+            Cv2.WarpPerspective(
+                src,
+                transformed,
+                matrix,
+                new OpenCvSharp.Size(width, height));
+
+
+
+            File.WriteAllBytes("CROPPED_WARPED.jpg", transformed.ToBytes(".jpg"));
+
 
             // 2. Улучшение контраста (CLAHE) только для яркости
             using var claheImg = new Mat();
             using (var clahe = Cv2.CreateCLAHE(clipLimit: 3.0, tileGridSize: new OpenCvSharp.Size(8, 8)))
             {
                 using var lab = new Mat();
-                Cv2.CvtColor(src, lab, ColorConversionCodes.BGR2Lab);
+                Cv2.CvtColor(transformed, lab, ColorConversionCodes.BGR2Lab);
 
                 var channels = Cv2.Split(lab);
                 using var lChannel = channels[0]; // Канал яркости
@@ -237,7 +277,7 @@ namespace OCR_test
         Cv2.BitwiseOr(blackTextMask, whiteTextMask, allTextMask);
 
         // 7. Создаем финальный результат: черные буквы на белом фоне
-        using var result = new Mat(src.Size(), MatType.CV_8UC1, new Scalar(255)); // Белый лист
+        using var result = new Mat(transformed.Size(), MatType.CV_8UC1, new Scalar(255)); // Белый лист
 
         // Там, где был текст (allTextMask), красим в черный цвет (0)
         result.SetTo(new Scalar(0), allTextMask);
@@ -247,8 +287,13 @@ namespace OCR_test
         return (bytes1, bytes2, bytes3);
 
     }
-    
 
+        static double Distance(Point2f p1, Point2f p2)
+        {
+            double dx = p1.X - p2.X;
+            double dy = p1.Y - p2.Y;
+            return Math.Sqrt(dx * dx + dy * dy);
+        }
 
         public static List<(Tesseract.Rect, string)> Recognition(string TessDataPath, byte[] imgData)
         {
