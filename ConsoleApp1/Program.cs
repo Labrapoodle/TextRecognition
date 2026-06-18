@@ -2,6 +2,7 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Net.Http.Headers;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -39,6 +40,12 @@ namespace OCR_test
             // 1. Загрузка изображения
             using var src = Cv2.ImDecode(imageBytes, ImreadModes.Color);
 
+            using var gray = new Mat();
+            Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
+
+
+            Mat blurred = new();
+            Cv2.MedianBlur(gray, blurred, 3);
 
             int h = src.Rows;
             int w = src.Cols;
@@ -49,11 +56,13 @@ namespace OCR_test
             {
                 for (int x = 0; x < w; x++)
                 {
-                    arr[y, x] = src.At<byte>(y, x);
+                    arr[y, x] = blurred.At<byte>(y, x);
                 }
             }
 
-            byte[,] sig = LocalSigmoidContrast(arr, radius: 15, k: 10.0);
+            
+
+            byte[,] sig = LocalStatisticSigmoidContrast(arr, radius: 15, k: 2.5);
 
             Mat sigmoidMat =
             new Mat(h, w, MatType.CV_8UC1);
@@ -87,10 +96,10 @@ namespace OCR_test
 
 
 
-        public static byte[,] LocalSigmoidContrast(
+        public static byte[,] LocalStatisticSigmoidContrast(
     byte[,] img,
     int radius,
-    double k)
+    double k = 2.5)
         {
             int h = img.GetLength(0);
             int w = img.GetLength(1);
@@ -101,40 +110,60 @@ namespace OCR_test
             {
                 for (int x = 0; x < w; x++)
                 {
-                    int min = 255;
-                    int max = 0;
+                    int y0 = Math.Max(0, y - radius);
+                    int y1 = Math.Min(h - 1, y + radius);
 
-                    for (int yy = Math.Max(0, y - radius);
-                         yy <= Math.Min(h - 1, y + radius);
-                         yy++)
+                    int x0 = Math.Max(0, x - radius);
+                    int x1 = Math.Min(w - 1, x + radius);
+
+                    double sum = 0;
+                    double sum2 = 0;
+                    int count = 0;
+
+                    // собираем статистику окна
+                    for (int yy = y0; yy <= y1; yy++)
                     {
-                        for (int xx = Math.Max(0, x - radius);
-                             xx <= Math.Min(w - 1, x + radius);
-                             xx++)
+                        for (int xx = x0; xx <= x1; xx++)
                         {
-                            byte v = img[yy, xx];
+                            double v = img[yy, xx];
 
-                            if (v < min) min = v;
-                            if (v > max) max = v;
+                            sum += v;
+                            sum2 += v * v;
+                            count++;
                         }
                     }
 
-                    if (max == min)
+                    double mean = sum / count;
+
+                    double variance =
+                        sum2 / count - mean * mean;
+
+                    if (variance < 0)
+                        variance = 0;
+
+                    double std = Math.Sqrt(variance);
+
+                    // защита от деления на ноль
+                    if (std < 1.0)
                     {
                         result[y, x] = img[y, x];
                         continue;
                     }
 
-                    double xNorm =
-                        (img[y, x] - min) /
-                        (double)(max - min);
+                    // z-score
+                    double z =
+                        (img[y, x] - mean) / std;
 
+                    // сигмоида
                     double ySig =
                         1.0 /
-                        (1.0 + Math.Exp(-k * (xNorm - 0.5)));
+                        (1.0 + Math.Exp(-k * z));
 
                     result[y, x] =
-                        (byte)(255.0 * ySig);
+                        (byte)Math.Clamp(
+                            (int)(255.0 * ySig),
+                            0,
+                            255);
                 }
             }
 
