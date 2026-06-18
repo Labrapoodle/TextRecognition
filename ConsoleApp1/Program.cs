@@ -74,13 +74,19 @@ namespace OCR_test
                             sigmoidMat.Set(y, x, sig[y, x]);
                         }
                     }
+            File.WriteAllBytes("Sigmoid.png", sigmoidMat.ToBytes(".jpg"));
 
             var bytes2 = sigmoidMat.ToBytes(".jpg");
+
+
+            Mat blured_again = new();
+            Cv2.MedianBlur(sigmoidMat, blured_again, 3);
+            File.WriteAllBytes("Sigmoid.jpg", blured_again.ToBytes(".jpg"));
 
             Mat binary = new Mat();
 
             Cv2.AdaptiveThreshold(
-                sigmoidMat,
+                blured_again,
                 binary,
                 255,
                 AdaptiveThresholdTypes.GaussianC,
@@ -88,6 +94,22 @@ namespace OCR_test
                 41,
                 10);
 
+            File.WriteAllBytes("AdaptTHRESH.png", binary.ToBytes(".jpg"));
+
+
+            Mat morfol = new();
+
+            Mat kernel =
+                Cv2.GetStructuringElement(
+                    MorphShapes.Rect,
+                    new OpenCvSharp.Size(2, 2));
+
+                        Cv2.MorphologyEx(
+                            binary,
+                            morfol,
+                            MorphTypes.Open,
+                            kernel);
+            File.WriteAllBytes("Morfol.png", morfol.ToBytes(".jpg"));
             var bytes3 = binary.ToBytes(".jpg");
 
             return (null, bytes2, bytes3);
