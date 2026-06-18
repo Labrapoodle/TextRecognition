@@ -1,123 +1,175 @@
-﻿using OpenCvSharp;
-using System;
+﻿using System;
 using System.Drawing;
+using System.Drawing.Imaging;
+using System.Drawing.Drawing2D;
 using System.IO;
-using System.Reflection;
-using System.Security.Cryptography;
+using System.Net.Http;
 using System.Text;
-using Tesseract;
-using System.Text.RegularExpressions;
+using System.Text.Json;
+using System.Threading.Tasks;
 
-namespace OCR_test
+class Program
 {
-    internal class Program
+    static async Task Main(string[] args)
     {
-        static void Main(string[] args)
+        // Путь к папке с картинками и файл для записи результатов
+        string folderPath = @"C:\Users\k_alejnikov\Pictures\takes";
+        string outputFile = Path.Combine(AppContext.BaseDirectory, "text.txt");
+
+        // Проверяем, существует ли папка
+        if (!Directory.Exists(folderPath))
         {
-            // 1. Загружаем изображение СРАЗУ в черно-белом (Grayscale) формате
-            // Флаг ImreadModes.Grayscale гарантирует, что мы получим один канал на пиксель
-            using Mat srcGray = Cv2.ImRead("image.jpg", ImreadModes.Grayscale);
-
-            if (srcGray.Empty())
-            {
-                Console.WriteLine("Не удалось загрузить изображение!");
-                return;
-            }
-
-            int h = srcGray.Rows;
-            int w = srcGray.Cols;
-
-            // 2. Создаем массив byte[,] и переносим в него данные из Mat
-            byte[,] inputData = new byte[h, w];
-
-            // Используем эффективный индексатор OpenCvSharp для безопасного чтения пикселей
-            var indexerIn = srcGray.GetGenericIndexer<byte>();
-            for (int y = 0; y < h; y++)
-            {
-                for (int x = 0; x < w; x++)
-                {
-                    inputData[y, x] = indexerIn[y, x];
-                }
-            }
-
-            // 3. Передаем массив в ваш метод локального сигмоидального контраста
-            int radius = 15;    // Радиус локального окна анализа (чем больше, тем крупнее детали)
-            double k = 10.0;    // Коэффициент крутизны сигмоиды (сила контраста)
-
-            Console.WriteLine("Запуск локального изменения контраста... Это может занять некоторое время.");
-            byte[,] resultData = LocalSigmoidContrast(inputData, radius, k);
-
-            // 4. Переносим результат из byte[,] обратно в структуру OpenCV Mat
-            using Mat resultMat = new Mat(h, w, MatType.CV_8UC1);
-            var indexerOut = resultMat.GetGenericIndexer<byte>();
-            for (int y = 0; y < h; y++)
-            {
-                for (int x = 0; x < w; x++)
-                {
-                    indexerOut[y, x] = resultData[y, x];
-                }
-            }
-
-            // 5. Сохраняем готовую фотографию на диск
-            Cv2.ImWrite("SIGMOID_RESULT.jpg", resultMat);
-            Console.WriteLine("Изображение успешно обработано и сохранено как 'SIGMOID_RESULT.jpg'!");
+            Console.WriteLine($"Ошибка: Папка не найдена по пути {folderPath}");
+            return;
         }
 
-        public static byte[,] LocalSigmoidContrast(
-    byte[,] img,
-    int radius,
-    double k)
+        // Получаем все изображения из папки (jpg, jpeg, png)
+        string[] extensions = { "*.jpg", "*.jpeg", "*.png" };
+        var imageFiles = new System.Collections.Generic.List<string>();
+        foreach (var ext in extensions)
         {
-            int h = img.GetLength(0);
-            int w = img.GetLength(1);
+            imageFiles.AddRange(Directory.GetFiles(folderPath, ext));
+        }
 
-            byte[,] result = new byte[h, w];
+        if (imageFiles.Count == 0)
+        {
+            Console.WriteLine("В папке не найдено изображений для обработки.");
+            return;
+        }
 
-            for (int y = 0; y < h; y++)
+        Console.WriteLine($"Найдено изображений для обработки: {imageFiles.Count}");
+
+        // Создаем или перезаписываем чистый файл text.txt перед стартом цикла
+        File.WriteAllText(outputFile, $"--- Лог OCR обработки от {DateTime.Now} ---\n\n", Encoding.UTF8);
+
+        // Настраиваем HttpClient (задаем большой таймаут, так как обработка картинок нейросетью требует времени)
+        using var client = new HttpClient();
+        client.Timeout = TimeSpan.FromMinutes(10);
+
+        // Цикл по всем найденным картинкам
+        foreach (string imagePath in imageFiles)
+        {
+            string fileName = Path.GetFileName(imagePath);
+            Console.WriteLine($"\n[Выполняется] Обработка файла: {fileName}...");
+
+            try
             {
-                for (int x = 0; x < w; x++)
-                {
-                    int min = 255;
-                    int max = 0;
+                // 1. Читаем картинку и кодируем её в строку Base64
+                byte[] imageBytes = ResizeImageIfNeeded(imagePath, 1280);
+                string b64String = Convert.ToBase64String(imageBytes);
 
-                    for (int yy = Math.Max(0, y - radius);
-                         yy <= Math.Min(h - 1, y + radius);
-                         yy++)
+                // 2. Формируем анонимный объект для JSON-тела запроса (копия структуры из Python)
+                var payloadObject = new
+                {
+                    model = "qwen2.5vl:3b",
+                    messages = new[]
                     {
-                        for (int xx = Math.Max(0, x - radius);
-                             xx <= Math.Min(w - 1, x + radius);
-                             xx++)
+                        new
                         {
-                            byte v = img[yy, xx];
-
-                            if (v < min) min = v;
-                            if (v > max) max = v;
+                            role = "user",
+                            content = "Это скан технического экрана. Извлеки весь текст полностью, включая числа, параметры и единицы измерения. Не пропускай ничего.",
+                            images = new[] { b64String }
                         }
-                    }
-
-                    if (max == min)
+                    },
+                    stream = false,
+                    options = new
                     {
-                        result[y, x] = img[y, x];
-                        continue;
+                        num_predict = 4096,
+                        num_ctx = 8192,
+                        //temperature = 0.0, // Замораживаем точность
+                        //top_p = 0.1
                     }
+                };
 
-                    double xNorm =
-                        (img[y, x] - min) /
-                        (double)(max - min);
+                // Сериализуем объект в JSON-строку
+                string jsonPayload = JsonSerializer.Serialize(payloadObject);
+                var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
 
-                    double ySig =
-                        1.0 /
-                        (1.0 + Math.Exp(-k * (xNorm - 0.5)));
+                // 3. Отправляем HTTP POST запрос к Ollama
+                var response = await client.PostAsync("http://localhost:11434/api/chat", content);
+                response.EnsureSuccessStatusCode();
 
-                    result[y, x] =
-                        (byte)(255.0 * ySig);
-                }
+                // Читаем ответ сервера
+                string responseString = await response.Content.ReadAsStringAsync();
+
+                // 4. Десериализуем полученный JSON и достаем текст ответа модели
+                using JsonDocument doc = JsonDocument.Parse(responseString);
+                string rawContent = doc.RootElement
+                    .GetProperty("message")
+                    .GetProperty("content")
+                    .GetString();
+
+                // 5. Формируем блок текста для сохранения
+                StringBuilder fileBlock = new StringBuilder();
+                fileBlock.AppendLine($"========================================");
+                fileBlock.AppendLine($"ИМЯ ФАЙЛА: {fileName}");
+                fileBlock.AppendLine($"ДАТА ОБРАБОТКИ: {DateTime.Now}");
+                fileBlock.AppendLine($"========================================");
+                fileBlock.AppendLine(rawContent);
+                fileBlock.AppendLine("\n"); // Отступы между блоками разных картинок
+
+                // Дописываем данные в файл text.txt
+                File.AppendAllText(outputFile, fileBlock.ToString(), Encoding.UTF8);
+                Console.WriteLine($"[Успех] Данные файла {fileName} добавлены в text.txt");
             }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Ошибка] Не удалось обработать файл {fileName}: {ex.Message}");
 
-            return result;
+                // Опционально: записываем ошибку по конкретному файлу в лог, чтобы не терять общую картину
+                File.AppendAllText(outputFile, $"========================================\nИМЯ ФАЙЛА: {fileName}\n[ОШИБКА ОБРАБОТКИ]: {ex.Message}\n========================================\n\n", Encoding.UTF8);
+            }
         }
 
+        Console.WriteLine($"\nВсе готово! Все результаты собраны в файле: {outputFile}");
+    }
 
 
+    static byte[] ResizeImageIfNeeded(string imagePath, int maxDimension)
+    {
+        using (var originalImage = Image.FromFile(imagePath))
+        {
+            // Если изображение и так меньше лимита, просто отдаем его байты без пересчета
+            if (originalImage.Width <= maxDimension && originalImage.Height <= maxDimension)
+            {
+                return File.ReadAllBytes(imagePath);
+            }
+
+            // Вычисляем новые пропорции
+            int newWidth, newHeight;
+            if (originalImage.Width > originalImage.Height)
+            {
+                newWidth = maxDimension;
+                newHeight = (int)(originalImage.Height * ((double)maxDimension / originalImage.Width));
+            }
+            else
+            {
+                newHeight = maxDimension;
+                newWidth = (int)(originalImage.Width * ((double)maxDimension / originalImage.Height));
+            }
+
+            // Создаем новый пустой холст нужного размера
+            using (var resizedBitmap = new Bitmap(newWidth, newHeight))
+            {
+                // Настраиваем максимальное качество интерполяции при отрисовке
+                using (var graphics = Graphics.FromImage(resizedBitmap))
+                {
+                    graphics.CompositingQuality = CompositingQuality.HighQuality;
+                    graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    graphics.SmoothingMode = SmoothingMode.HighQuality;
+                    graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+                    // Рисуем старую картинку на новом холсте
+                    graphics.DrawImage(originalImage, 0, 0, newWidth, newHeight);
+                }
+
+                // Сохраняем результат в поток байт как JPEG
+                using (var ms = new MemoryStream())
+                {
+                    resizedBitmap.Save(ms, ImageFormat.Jpeg);
+                    return ms.ToArray();
+                }
+            }
+        }
     }
 }
