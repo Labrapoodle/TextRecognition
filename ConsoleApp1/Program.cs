@@ -8,29 +8,84 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Tesseract;
+using System.Diagnostics; 
+using System.Net.Http;
 
 namespace OCR_test
 {
     internal class Program
     {
-        static async Task Main(string[] args)
+        private static readonly HttpClient _httpClient =  new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        static async Task Main()
         {
-            var path = Assembly.GetExecutingAssembly().Location;
-            var tessPath = Path.Combine(Path.GetDirectoryName(path), "TessData");
-            byte[] imgData;
-            using (var file = File.OpenRead("image3.jpg"))
-            {
-                imgData = new byte[file.Length];
-                file.Read(imgData, 0, imgData.Length);
-            }
+            string takesDir =
+                @"C:\Users\k_alejnikov\Pictures\takes";
 
-            var res =  await Recognition(tessPath, imgData);
-            using var sw = new StreamWriter("output.txt", false);
-            for (int i = 0; i < res.Count; i++)
+            string outputDir =
+                @"C:\Users\k_alejnikov\Pictures";
+
+            string[] files =
+                Directory.GetFiles(takesDir)
+                         .Take(2)
+                         .ToArray();
+
+            for (int i = 0; i < files.Length; i++)
             {
-                sw.Write($"{res[i].Item1}: {res[i].Item2}");
+                Console.WriteLine();
+                Console.WriteLine(
+                    $"===== IMAGE {i + 1} =====");
+
+                Stopwatch swTotal =
+                    Stopwatch.StartNew();
+
+                byte[] bytes =
+                    await File.ReadAllBytesAsync(files[i]);
+
+                Stopwatch swQwen =
+                    Stopwatch.StartNew();
+
+                List<TextBox> boxes =
+                    await DetectTextBlocks(bytes);
+
+                swQwen.Stop();
+
+                using var img =
+                    Cv2.ImDecode(
+                        bytes,
+                        ImreadModes.Color);
+
+                Stopwatch swCv =
+                    Stopwatch.StartNew();
+
+                using var result =
+                    KeepOnlyTextAreas(img, boxes);
+
+                swCv.Stop();
+
+                string outFile =
+                    Path.Combine(
+                        outputDir,
+                        $"result_{i + 1}.png");
+
+                Cv2.ImWrite(outFile, result);
+
+                swTotal.Stop();
+
+                Console.WriteLine(
+                    $"Boxes found: {boxes.Count}");
+
+                Console.WriteLine(
+                    $"Qwen: {swQwen.ElapsedMilliseconds} ms");
+
+                Console.WriteLine(
+                    $"OpenCV: {swCv.ElapsedMilliseconds} ms");
+
+                Console.WriteLine(
+                    $"Total: {swTotal.ElapsedMilliseconds} ms");
+
+                Console.WriteLine(
+                    $"Saved: {outFile}");
             }
-            sw.Flush();
         }
 
         /*
@@ -128,309 +183,216 @@ namespace OCR_test
         }
         */
 
-        
-        static async Task<(byte[], byte[], byte[])>   ProcessImage(byte[] imageBytes)
+
+        static Mat KeepOnlyTextAreas(
+    Mat source,
+    List<TextBox> boxes)
         {
-            // 1. Загрузка изображения
-            using var src = Cv2.ImDecode(imageBytes, ImreadModes.Color);
+            Mat result =
+                new Mat(
+                    source.Size(),
+                    source.Type(),
+                    Scalar.White);
 
-            Mat transformer = await ExtractAndWarpScreenAsync(src);
-
-            File.WriteAllBytes("TRANSFORMER.jpg", transformer.ToBytes(".jpg"));
-
-            // 2. Улучшение контраста (CLAHE) только для яркости
-            using var claheImg = new Mat();
-            using (var clahe = Cv2.CreateCLAHE(clipLimit: 3.0, tileGridSize: new OpenCvSharp.Size(8, 8)))
+            foreach (var box in boxes)
             {
-                using var lab = new Mat();
-                Cv2.CvtColor(transformer, lab, ColorConversionCodes.BGR2Lab);
+                int x1 =
+                    (int)(box.x1 * source.Width / 1000f);
 
-                var channels = Cv2.Split(lab);
-                using var lChannel = channels[0]; // Канал яркости
-                using var aChannel = channels[1];
-                using var bChannel = channels[2];
+                int y1 =
+                    (int)(box.y1 * source.Height / 1000f);
 
+                int x2 =
+                    (int)(box.x2 * source.Width / 1000f);
 
+                int y2 =
+                    (int)(box.y2 * source.Height / 1000f);
 
+                x1 = Math.Max(0, x1);
+                y1 = Math.Max(0, y1);
 
-                clahe.Apply(lChannel, lChannel);
+                x2 = Math.Min(source.Width - 1, x2);
+                y2 = Math.Min(source.Height - 1, y2);
+                /*
+               var rect =
+                   new OpenCvSharp.Rect(
+                       x1,
+                       y1,
+                       x2 - x1,
+                       y2 - y1);
 
-                using var newLab = new Mat();
-                Cv2.Merge(new[] { lChannel, aChannel, bChannel }, newLab);
-                Cv2.CvtColor(newLab, claheImg, ColorConversionCodes.Lab2BGR);
-            }
+               using var srcRoi =
+                   new Mat(source, rect);
 
-            File.WriteAllBytes("CLAHE.jpg", claheImg.ToBytes(".jpg"));
+               using var dstRoi =
+                   new Mat(result, rect);
 
+               srcRoi.CopyTo(dstRoi);
+                */
 
-            // 3. Размытие и перевод в серый цвет
-            using var blurred = new Mat();
-            Cv2.GaussianBlur(claheImg, blurred, new OpenCvSharp.Size(5, 5), 2.0);
-            //Cv2.MedianBlur(claheImg, blurred, 577);
-            //Cv2.BilateralFilter(claheImg, blurred,15,150,150);
-
-            File.WriteAllBytes("BLURRED.jpg", blurred.ToBytes(".jpg"));
-
-            using var gray = new Mat();
-            Cv2.CvtColor(blurred, gray, ColorConversionCodes.BGR2GRAY);
-
-
-
-            File.WriteAllBytes("GRAYED.jpg", gray.ToBytes(".jpg"));
-
-
-
-
-
-
-
-
-
-            /*
-            using var normalized = new Mat();
-            var kernel = Cv2.GetStructuringElement(
-                MorphShapes.Rect,
-                new OpenCvSharp.Size(101, 101));
-
-            Cv2.MorphologyEx(
-                gray,
-                background,
-                MorphTypes.Close,
-                kernel
-             );
-            Cv2.Absdiff(gray, background, normalized);
-            */
-            // Получаем карту освещения
-
-            var bytes1 = gray.ToBytes(".jpg");
-
-            using var background = new Mat();
-
-        Cv2.GaussianBlur(
-            gray,
-            background,
-            new OpenCvSharp.Size(0, 0),
-            50
-        );
-        // Вычитаем фон
-        using var diffed = new Mat();
-        Cv2.Absdiff(gray, background, diffed);
-
-            File.WriteAllBytes("ShaDOWcORRECT.jpg", diffed.ToBytes(".jpg"));
-
-            //    using var normalized = new Mat();
-            //Cv2.Normalize(diffed, normalized, 0, 255, NormTypes.MinMax);
-
-
-
-
-
-
-
-
-
-            // 4. Ищем ЧЕРНЫЕ буквы (все, что темнее 51, станет черным)
-            using var blackTextMask = new Mat();
-        Cv2.Threshold(diffed, blackTextMask, 51, 255, ThresholdTypes.Binary);
-            var bytes2 = diffed.ToBytes(".jpg");
-
-            File.WriteAllBytes("BLACKtEXTmASK.jpg", blackTextMask.ToBytes(".jpg"));
-
-            // 5. Ищем БЕЛЫЕ буквы (все, что светлее 204, станет черным после инверсии)
-            using var whiteTextMask = new Mat();
-        Cv2.Threshold(gray, whiteTextMask, 204, 255, ThresholdTypes.Binary);
-
-            File.WriteAllBytes("wHITEtEXTmASK.jpg", whiteTextMask.ToBytes(".jpg"));
-
-            // 6. Объединяем буквы вместе (Черные буквы + Белые буквы)
-            using var allTextMask = new Mat();
-        Cv2.BitwiseOr(blackTextMask, whiteTextMask, allTextMask);
-
-            File.WriteAllBytes("aLLtEXTmASK.jpg", allTextMask.ToBytes(".jpg"));
-
-            // 7. Создаем финальный результат: черные буквы на белом фоне
-            using var result = new Mat(transformer.Size(), MatType.CV_8UC1, new Scalar(255)); // Белый лист
-
-            File.WriteAllBytes("RESULTbefore.jpg", result.ToBytes(".jpg"));
-
-            // Там, где был текст (allTextMask), красим в черный цвет (0)
-            result.SetTo(new Scalar(0), allTextMask);
-
-            File.WriteAllBytes("RESULTafter.jpg", result.ToBytes(".jpg"));
-
-            var bytes3 = result.ToBytes(".jpg");
-
-        return (bytes1, bytes2, bytes3);
-
-        }
-    
-
-
-        public static async Task<List<(Tesseract.Rect, string)>> Recognition(string TessDataPath, byte[] imgData)
-        {
-            //string imagePath = "screen.jpg"; // Путь к фото
-            //string tessData = @"C:\tessdata\"; // Путь к данным Tesseract (скачать tessdata)
-
-            var corrImgData = await ProcessImage(imgData);
-            //File.WriteAllBytes("postcorrection.jpg", corrImgData.Item1);
-            //File.WriteAllBytes("postcorrectionN.jpg", corrImgData.Item2);
-            //File.WriteAllBytes("postcorrectionSum.jpg", corrImgData.Item3);
-
-            //var corrImgDataN = ProcessImageNeg(imgData);
-            //File.WriteAllBytes("postcorrectionN.jpg", corrImgDataN);
-
-            List<(Tesseract.Rect, string)> result = new System.Collections.Generic.List<(Tesseract.Rect, string)>();
-            using (var engine = new TesseractEngine(TessDataPath, "rus+eng", EngineMode.LstmOnly))
-            using (var img = Pix.LoadFromMemory(corrImgData.Item3))
-            using (var page = engine.Process(img))
-            {
-                using (var iter = page.GetIterator())
-                {
-                    iter.Begin();
-                    do
-                    {
-                        if (iter.IsAtBeginningOf(PageIteratorLevel.TextLine))
-                        {
-                            var text = iter.GetText(PageIteratorLevel.TextLine);
-                            if (iter.TryGetBoundingBox(PageIteratorLevel.TextLine, out Tesseract.Rect bbox))
-                            {
-                                result.Add((bbox, text));
-                            }
-                        }
-                    } while (iter.Next(PageIteratorLevel.TextLine));
-                }
+                Cv2.Rectangle(
+                source,
+                new OpenCvSharp.Point(x1, y1),
+                new OpenCvSharp.Point(x2, y2),
+                Scalar.Red,
+                5);
             }
 
             return result;
         }
 
-        // HttpClient переиспользуется, чтобы не плодить сокеты
-        private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-
-        // Структура для десериализации точек из ответа Qwen
-        private class ScreenCoordinates
+        static async Task<List<TextBox>> DetectTextBlocks(byte[] imageBytes)
         {
-            public float[] top_left { get; set; }
-            public float[] top_right { get; set; }
-            public float[] bottom_right { get; set; }
-            public float[] bottom_left { get; set; }
-        }
 
-        /// <summary>
-        /// Принимает оригинальный Mat, находит рамку экрана через Qwen2.5-VL,
-        /// исправляет перспективу и возвращает выровненный Mat.
-        /// </summary>
-        public static async Task<Mat> ExtractAndWarpScreenAsync(Mat src)
-        {
-            if (src == null || src.Empty())
-                throw new ArgumentException("Исходный Mat пуст или не инициализирован.");
+            using var src = Cv2.ImDecode(imageBytes, ImreadModes.Color);
 
-            // === 1. УМЕНЬШЕНИЕ МАСШТАБА ДЛЯ OLLAMA СРЕДСТВАМИ OPENCV ===
             const int maxDimension = 1280;
-            Mat resized = new Mat();
+
+            using var resized = new Mat();
 
             if (src.Width > maxDimension || src.Height > maxDimension)
             {
-                double scale = maxDimension / (double)Math.Max(src.Width, src.Height);
-                int newWidth = (int)(src.Width * scale);
-                int newHeight = (int)(src.Height * scale);
-                // Используем Area или Linear интерполяцию для сохранения четкости текста
-                Cv2.Resize(src, resized, new OpenCvSharp.Size(newWidth, newHeight), 0, 0, InterpolationFlags.Area);
+                double scale =
+                    maxDimension /
+                    (double)Math.Max(src.Width, src.Height);
+
+                Cv2.Resize(
+                    src,
+                    resized,
+                    new OpenCvSharp.Size(
+                        (int)(src.Width * scale),
+                        (int)(src.Height * scale)),
+                    0,
+                    0,
+                    InterpolationFlags.Area);
             }
             else
             {
-                resized = src.Clone(); // Если картинка и так маленькая, просто копируем
+                src.CopyTo(resized);
             }
 
-            // === 2. КОДИРОВАНИЕ В BASE64 ===
-            // Кодируем ужатый Mat в JPEG прямо в памяти
-            Cv2.ImEncode(".jpg", resized, out byte[] imageBytes);
-            string b64String = Convert.ToBase64String(imageBytes);
-            resized.Dispose(); // Освобождаем память от временного пожатого кадра
 
-            // === 3. ОТПРАВКА ЗАПРОСА В OLLAMA ===
-            var payloadObject = new
+            Mat gray = new();
+            Cv2.CvtColor(resized, gray, ColorConversionCodes.BGR2GRAY);
+            Cv2.ImEncode(".jpg", gray, out byte[] smallImage);
+
+            string b64 = Convert.ToBase64String(smallImage);
+
+            var payload = new
             {
-                model = "qwen2.5vl:3b",
+                model = "qwen2.5vl:3b",                
                 messages = new[]
                 {
                 new
                 {
                     role = "user",
-                    content = "Это технический монитор. Найди 4 угла САМОЙ ВНУТРЕННЕЙ рабочей области экрана (матрицы с текстом), " +
-                              "игнорируя внешнюю пластиковую рамку (безель). " +
-                              "Верни ответ СТРОГО в формате JSON с нормализованными координатами от 0 до 1000:\n" +
-                              "{\n" +
-                              "  \"top_left\": [x, y],\n" +
-                              "  \"top_right\": [x, y],\n" +
-                              "  \"bottom_right\": [x, y],\n" +
-                              "  \"bottom_left\": [x, y]\n" +
-                              "}",
-                    images = new[] { b64String }
+                    content =
+                   """
+                   На фотографии промышленный экран управления.
+
+                   Найди ВСЕ области, содержащие любую текстовую информацию:
+
+                   - русский текст;
+                   - английский текст;
+                   - буквенно-цифровые коды;
+                   - параметры вида P21, T9030, N9000;
+                   - числа;
+                   - единицы измерения (bar, mm, %, l/min и т.д.);
+                   - строки состояния;
+                   - сообщения об ошибках;
+                   - меню и заголовки.
+
+                   Не объединяй удалённые области между собой.
+
+                   Верни только JSON массив.
+
+                   Координаты нормализованы от 0 до 1000.
+
+                   Формат:
+
+                   [
+                     {
+                       "x1": 100,
+                       "y1": 100,
+                       "x2": 300,
+                       "y2": 150
+                     }
+                   ]
+
+                   Без markdown.
+                   Без комментариев.
+                   Без пояснений.
+                   """,
+                    images = new[] { b64 }
                 }
             },
                 stream = false,
-                options = new { temperature = 0.0, top_p = 0.1 }
+                options = new
+                {
+                    temperature = 0
+                }
             };
 
-            string jsonPayload = JsonSerializer.Serialize(payloadObject);
-            using var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+            string json = JsonSerializer.Serialize(payload);
 
-            var response = await _httpClient.PostAsync("http://localhost:11434/api/chat", content);
-            response.EnsureSuccessStatusCode();
+            using var content = new StringContent(
+                json,
+                Encoding.UTF8,
+                "application/json");
 
-            string responseString = await response.Content.ReadAsStringAsync();
+            var response =
+                await _httpClient.PostAsync(
+                    "http://localhost:11434/api/chat",
+                    content);
 
-            // === 4. ПАРСИНГ КООРДИНАТ ИЗ ОТВЕТА ===
-            using JsonDocument doc = JsonDocument.Parse(responseString);
-            string rawContent = doc.RootElement.GetProperty("message").GetProperty("content").GetString();
+            
+            
 
-            Console.WriteLine($"\n[ОТВЕТ QWEN]:\n{rawContent}\n");
+            string responseString =
+                await response.Content.ReadAsStringAsync();
 
-            // Извлекаем чистый JSON, если модель обернула его в маркдаун-блок ```json ... ```
-            var jsonMatch = Regex.Match(rawContent, @"\{.*\}", RegexOptions.Singleline);
-            if (!jsonMatch.Success)
-                throw new Exception($"Модель вернула некорректный ответ без JSON структуры: {rawContent}");
-
-            var coords = JsonSerializer.Deserialize<ScreenCoordinates>(jsonMatch.Value);
-
-            // === 5. ПЕРЕСЧЕТ В РЕАЛЬНЫЕ ПИКСЕЛИ ОРИГИНАЛА ===
-            int imgWidth = src.Width;
-            int imgHeight = src.Height;
-
-            Point2f[] srcPoints = new Point2f[]
+            if (!response.IsSuccessStatusCode)
             {
-            new Point2f(coords.top_left[0] * imgWidth / 1000f,     coords.top_left[1] * imgHeight / 1000f),
-            new Point2f(coords.top_right[0] * imgWidth / 1000f,    coords.top_right[1] * imgHeight / 1000f),
-            new Point2f(coords.bottom_right[0] * imgWidth / 1000f, coords.bottom_right[1] * imgHeight / 1000f),
-            new Point2f(coords.bottom_left[0] * imgWidth / 1000f,  coords.bottom_left[1] * imgHeight / 1000f)
-            };
+                Console.WriteLine();
+                Console.WriteLine("=== OLLAMA ERROR ===");
+                Console.WriteLine(response.StatusCode);
+                Console.WriteLine(responseString);
+                Console.WriteLine("====================");
+                Console.WriteLine();
 
-            // === 6. РАСЧЕТ РАЗМЕРОВ ЦЕЛЕВОГО ОКНА ===
-            double widthTop = Point2f.Distance(srcPoints[0], srcPoints[1]);
-            double widthBottom = Point2f.Distance(srcPoints[2], srcPoints[3]);
-            int maxWidth = Convert.ToInt32(Math.Max(widthTop, widthBottom));
+                throw new Exception(
+                    $"Ollama returned {(int)response.StatusCode}");
+            }
 
-            double heightLeft = Point2f.Distance(srcPoints[0], srcPoints[3]);
-            double heightRight = Point2f.Distance(srcPoints[1], srcPoints[2]);
-            int maxHeight = Convert.ToInt32(Math.Max(heightLeft, heightRight));
+            using JsonDocument doc =
+                JsonDocument.Parse(responseString);
 
-            Point2f[] destPoints = new Point2f[]
-            {
-            new Point2f(0, 0),
-            new Point2f(maxWidth - 1, 0),
-            new Point2f(maxWidth - 1, maxHeight - 1),
-            new Point2f(0, maxHeight - 1)
-            };
+            string raw =
+                doc.RootElement
+                    .GetProperty("message")
+                    .GetProperty("content")
+                    .GetString();
 
-            // === 7. ВОССТАНОВЛЕНИЕ ПЕРСПЕКТИВЫ (WARP) ===
-            using Mat transformMatrix = Cv2.GetPerspectiveTransform(srcPoints, destPoints);
+            raw = raw.Replace("```json", "");
+            raw = raw.Replace("```", "");
+            raw = raw.Trim();
 
-            Mat dst = new Mat();
-            // Применяем трансформацию прямо к оригинальному (качественному) Mat
-            Cv2.WarpPerspective(src, dst, transformMatrix, new OpenCvSharp.Size(maxWidth, maxHeight), InterpolationFlags.Cubic);
+            var match =
+                Regex.Match(raw, @"\[.*\]",
+                RegexOptions.Singleline);
 
-            return dst; // Возвращаем идеально ровный вырезанный экран
+            if (!match.Success)
+                throw new Exception(raw);
+
+            return JsonSerializer.Deserialize<List<TextBox>>(match.Value)!;
+        }
+
+        public sealed class TextBox
+        {
+            public float x1 { get; set; }
+            public float y1 { get; set; }
+            public float x2 { get; set; }
+            public float y2 { get; set; }
         }
 
     }
