@@ -12,10 +12,14 @@ class Program
 {
     static async Task Main(string[] args)
     {
+        
         // Путь к папке с картинками и файл для записи результатов
-        string folderPath = @"C:\Users\k_alejnikov\Pictures\takes";
+        
+        
         string outputFile = Path.Combine(AppContext.BaseDirectory, "text.txt");
 
+        /*
+        string folderPath = @"C:\Users\k_alejnikov\Pictures\takes";
         // Проверяем, существует ли папка
         if (!Directory.Exists(folderPath))
         {
@@ -30,6 +34,19 @@ class Program
         {
             imageFiles.AddRange(Directory.GetFiles(folderPath, ext));
         }
+        */
+
+        string imagePath = @"C:\Users\k_alejnikov\Pictures\takes\IMG_20260618_152400.jpg";
+
+        if (!File.Exists(imagePath))
+        {
+            Console.WriteLine($"Ошибка: Файл не найден: {imagePath}");
+            return;
+        }
+
+        var imageFiles = new List<string> { imagePath };
+
+        
 
         if (imageFiles.Count == 0)
         {
@@ -47,15 +64,15 @@ class Program
         client.Timeout = TimeSpan.FromMinutes(10);
 
         // Цикл по всем найденным картинкам
-        foreach (string imagePath in imageFiles)
+        foreach (string imagePathe in imageFiles)
         {
-            string fileName = Path.GetFileName(imagePath);
+            string fileName = Path.GetFileName(imagePathe);
             Console.WriteLine($"\n[Выполняется] Обработка файла: {fileName}...");
 
             try
             {
                 // 1. Читаем картинку и кодируем её в строку Base64
-                byte[] imageBytes = ResizeImageIfNeeded(imagePath, 1280);
+                byte[] imageBytes = ResizeImageIfNeeded(imagePathe, 1280);
                 string b64String = Convert.ToBase64String(imageBytes);
 
                 // 2. Формируем анонимный объект для JSON-тела запроса (копия структуры из Python)
