@@ -1,7 +1,9 @@
-﻿using System;
+﻿using OpenCvSharp;
+using System;
+using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Net.Http;
 using System.Text;
@@ -12,10 +14,11 @@ class Program
 {
     static async Task Main(string[] args)
     {
-        
+        Stopwatch stopwatch = Stopwatch.StartNew();
+
         // Путь к папке с картинками и файл для записи результатов
-        
-        
+
+
         string outputFile = Path.Combine(AppContext.BaseDirectory, "text.txt");
 
         /*
@@ -36,7 +39,7 @@ class Program
         }
         */
 
-        string imagePath = @"C:\Users\k_alejnikov\Pictures\takes\IMG_20260618_152400.jpg";
+        string imagePath = @"C:\Users\k_alejnikov\Pictures\takes\example.jpg";
 
         if (!File.Exists(imagePath))
         {
@@ -63,6 +66,8 @@ class Program
         using var client = new HttpClient();
         client.Timeout = TimeSpan.FromMinutes(10);
 
+        int originalWidth = 0;
+        int resized_width = 1280;
         // Цикл по всем найденным картинкам
         foreach (string imagePathe in imageFiles)
         {
@@ -72,7 +77,14 @@ class Program
             try
             {
                 // 1. Читаем картинку и кодируем её в строку Base64
-                byte[] imageBytes = ResizeImageIfNeeded(imagePathe, 1280);
+                using (var someImg = Image.FromFile(imagePath))
+                {
+                    originalWidth = someImg.Width; // <-- Запоминаем изначальную ширину
+                }
+                
+                byte[] imageBytes = ResizeImageIfNeeded(imagePathe, resized_width);
+                File.WriteAllBytes("RESIZED_2.jpg", imageBytes);
+                //byte[] imageBytesTransformed = ProcessImage(imageBytes);
                 string b64String = Convert.ToBase64String(imageBytes);
 
                 // 2. Формируем анонимный объект для JSON-тела запроса (копия структуры из Python)
@@ -137,7 +149,13 @@ class Program
                 File.AppendAllText(outputFile, $"========================================\nИМЯ ФАЙЛА: {fileName}\n[ОШИБКА ОБРАБОТКИ]: {ex.Message}\n========================================\n\n", Encoding.UTF8);
             }
         }
+        stopwatch.Stop();
 
+        double totalSeconds = stopwatch.ElapsedMilliseconds / 1000.0;
+        Console.WriteLine($"\n--- Статистика обработки ---");
+        Console.WriteLine($"Ширина изначального фото: {resized_width} px");
+        Console.WriteLine($"Потраченное время: {totalSeconds:F2} с");
+        
         Console.WriteLine($"\nВсе готово! Все результаты собраны в файле: {outputFile}");
     }
 
@@ -174,7 +192,7 @@ class Program
                     graphics.CompositingQuality = CompositingQuality.HighQuality;
                     graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     graphics.SmoothingMode = SmoothingMode.HighQuality;
-                    graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    graphics.PixelOffsetMode = PixelOffsetMode.Half;
 
                     // Рисуем старую картинку на новом холсте
                     graphics.DrawImage(originalImage, 0, 0, newWidth, newHeight);
@@ -188,5 +206,128 @@ class Program
                 }
             }
         }
+    }
+
+    static byte[] ProcessImage(byte[] imageBytes)
+    {
+        // 1. Загрузка изображения
+        using var src = Cv2.ImDecode(imageBytes, ImreadModes.Color);
+
+
+
+
+
+        // 2. Улучшение контраста (CLAHE) только для яркости
+        using var claheImg = new Mat();
+        using (var clahe = Cv2.CreateCLAHE(clipLimit: 3.0, tileGridSize: new OpenCvSharp.Size(8, 8)))
+        {
+            using var lab = new Mat();
+            Cv2.CvtColor(src, lab, ColorConversionCodes.BGR2Lab);
+
+            var channels = Cv2.Split(lab);
+            using var lChannel = channels[0]; // Канал яркости
+            using var aChannel = channels[1];
+            using var bChannel = channels[2];
+
+
+
+
+            clahe.Apply(lChannel, lChannel);
+
+            using var newLab = new Mat();
+            Cv2.Merge(new[] { lChannel, aChannel, bChannel }, newLab);
+            Cv2.CvtColor(newLab, claheImg, ColorConversionCodes.Lab2BGR);
+        }
+        var bytes1 = claheImg.ToBytes(".jpg");
+
+        // 3. Размытие и перевод в серый цвет
+        using var blurred = new Mat();
+        Cv2.GaussianBlur(claheImg, blurred, new OpenCvSharp.Size(5, 5), 2.0);
+        //Cv2.MedianBlur(claheImg, blurred, 577);
+        //Cv2.BilateralFilter(claheImg, blurred,15,150,150);
+
+        using var gray = new Mat();
+        Cv2.CvtColor(blurred, gray, ColorConversionCodes.BGR2GRAY);
+
+
+
+
+
+
+
+
+
+
+
+
+
+        /*
+        using var normalized = new Mat();
+        var kernel = Cv2.GetStructuringElement(
+            MorphShapes.Rect,
+            new OpenCvSharp.Size(101, 101));
+
+        Cv2.MorphologyEx(
+            gray,
+            background,
+            MorphTypes.Close,
+            kernel
+         );
+        Cv2.Absdiff(gray, background, normalized);
+        */
+        // Получаем карту освещения
+
+        
+
+        using var background = new Mat();
+
+        Cv2.GaussianBlur(
+            gray,
+            background,
+            new OpenCvSharp.Size(0, 0),
+            50
+        );
+        // Вычитаем фон
+        using var diffed = new Mat();
+        Cv2.Absdiff(gray, background, diffed);
+
+
+
+        //    using var normalized = new Mat();
+        //Cv2.Normalize(diffed, normalized, 0, 255, NormTypes.MinMax);
+
+
+
+
+
+
+
+
+
+        // 4. Ищем ЧЕРНЫЕ буквы (все, что темнее 51, станет черным)
+        using var blackTextMask = new Mat();
+        Cv2.Threshold(diffed, blackTextMask, 51, 255, ThresholdTypes.Binary);
+        var bytes2 = diffed.ToBytes(".jpg");
+
+        // 5. Ищем БЕЛЫЕ буквы (все, что светлее 204, станет черным после инверсии)
+        using var whiteTextMask = new Mat();
+        Cv2.Threshold(gray, whiteTextMask, 204, 255, ThresholdTypes.Binary);
+
+
+        // 6. Объединяем буквы вместе (Черные буквы + Белые буквы)
+        using var allTextMask = new Mat();
+        Cv2.BitwiseOr(blackTextMask, whiteTextMask, allTextMask);
+
+        // 7. Создаем финальный результат: черные буквы на белом фоне
+        using var result = new Mat(src.Size(), MatType.CV_8UC1, new Scalar(255)); // Белый лист
+
+        // Там, где был текст (allTextMask), красим в черный цвет (0)
+        result.SetTo(new Scalar(0), allTextMask);
+
+        Cv2.ImWrite("justCLAHE.jpg", claheImg);
+        var bytes3 = result.ToBytes(".jpg");
+
+        return bytes1;
+
     }
 }
